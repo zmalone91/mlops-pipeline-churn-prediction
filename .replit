@@ -68,7 +68,7 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "MLFLOW_TRACKING_URI=http://0.0.0.0:5001 MLFLOW_DEFAULT_ARTIFACT_ROOT=./mlruns mlflow server --host 0.0.0.0 --port 5001 --backend-store-uri=./mlruns --default-artifact-root=./mlruns"
+args = "MLFLOW_TRACKING_URI=http://0.0.0.0:5001 MLFLOW_DEFAULT_ARTIFACT_ROOT=./mlruns mlflow server --host 0.0.0.0 --port 5001 --backend-store-uri=./mlruns --default-artifact-root=./mlruns --serve-artifacts --gunicorn-opts '--timeout 120'"
 waitForPort = 5001
 
 [[ports]]
