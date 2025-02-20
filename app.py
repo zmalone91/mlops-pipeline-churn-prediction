@@ -5,12 +5,17 @@ from src.data_processor import DataProcessor
 from src.model_trainer import ModelTrainer
 from src.model_evaluator import ModelEvaluator
 from src.model_monitor import ModelMonitor
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 def main():
     st.set_page_config(page_title="MLOps Pipeline Demo", layout="wide")
-    
+
     st.title("MLOps Pipeline Demo: Customer Churn Prediction")
-    
+
     # Initialize session state
     if 'data_processor' not in st.session_state:
         st.session_state.data_processor = DataProcessor()
@@ -18,14 +23,14 @@ def main():
         st.session_state.model_trainer = ModelTrainer()
     if 'model_monitor' not in st.session_state:
         st.session_state.model_monitor = ModelMonitor()
-    
+
     # Sidebar
     st.sidebar.title("Pipeline Steps")
     step = st.sidebar.radio(
         "Select Step",
-        ["Data Generation", "Data Processing", "Model Training", "Model Evaluation", "Model Monitoring"]
+        ["Data Generation", "Data Processing", "Model Training", "Model Evaluation", "Model Monitoring", "Cloud Deployment"]
     )
-    
+
     if step == "Data Generation":
         st.header("Data Generation")
         n_samples = st.slider("Number of samples", 100, 5000, 1000)
@@ -38,7 +43,8 @@ def main():
             
             st.write("Data Statistics:")
             st.dataframe(data.describe())
-    
+            
+
     elif step == "Data Processing":
         if 'data' not in st.session_state:
             st.error("Please generate data first!")
@@ -60,7 +66,8 @@ def main():
             
             st.write("Training set shape:", X_train.shape)
             st.write("Testing set shape:", X_test.shape)
-    
+            
+
     elif step == "Model Training":
         if 'X_train' not in st.session_state:
             st.error("Please process data first!")
@@ -86,7 +93,8 @@ def main():
                 st.success("Model trained successfully!")
                 st.write("Model Metrics:")
                 st.json(metrics)
-    
+                
+
     elif step == "Model Evaluation":
         if 'model' not in st.session_state:
             st.error("Please train model first!")
@@ -112,7 +120,8 @@ def main():
         
         st.subheader("Feature Importance")
         st.plotly_chart(evaluator.plot_feature_importance())
-    
+        
+
     elif step == "Model Monitoring":
         if 'model' not in st.session_state:
             st.error("Please train model first!")
@@ -137,6 +146,42 @@ def main():
         with col2:
             st.subheader("Metrics Trend")
             st.plotly_chart(st.session_state.model_monitor.get_metrics_trend())
+            
+
+    elif step == "Cloud Deployment":
+        if 'model' not in st.session_state:
+            st.error("Please train a model first!")
+            return
+
+        st.header("Cloud Deployment")
+
+        # Cloud provider selection
+        cloud_provider = st.selectbox(
+            "Select Cloud Provider",
+            ["AWS", "Azure", "GCP"],
+            key="cloud_provider"
+        )
+
+        # Cloud settings
+        cloud_settings = {}
+        if cloud_provider == "AWS":
+            cloud_settings['bucket_name'] = st.text_input("S3 Bucket Name", os.getenv('AWS_BUCKET_NAME', ''))
+        elif cloud_provider == "Azure":
+            cloud_settings['container_name'] = st.text_input("Storage Container Name", os.getenv('AZURE_CONTAINER_NAME', ''))
+        elif cloud_provider == "GCP":
+            cloud_settings['bucket_name'] = st.text_input("GCS Bucket Name", os.getenv('GCP_BUCKET_NAME', ''))
+
+        if st.button("Deploy Model"):
+            with st.spinner("Deploying model to cloud..."):
+                os.environ['CLOUD_PROVIDER'] = cloud_provider.lower()
+                result = st.session_state.model_trainer.deploy_model(cloud_settings)
+
+                if result['status'] == 'success':
+                    st.success(f"Model deployed successfully!")
+                    st.info(f"Deployment URL: {result['deployment_url']}")
+                else:
+                    st.error(f"Deployment failed: {result['message']}")
+
 
 if __name__ == "__main__":
     main()

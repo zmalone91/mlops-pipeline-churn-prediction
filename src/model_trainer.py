@@ -2,16 +2,16 @@ import mlflow
 import mlflow.sklearn
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from .cloud_deployer import CloudDeployer
 
 class ModelTrainer:
     def __init__(self):
         self.model = None
-        # Set MLflow tracking URI to the local server
+        self.cloud_deployer = CloudDeployer()
         mlflow.set_tracking_uri('http://0.0.0.0:5001')
 
     def train_model(self, X_train, y_train):
         """Train a Random Forest model and log metrics with MLflow."""
-        # Configure MLflow experiment
         experiment_name = "churn_prediction"
         try:
             mlflow.create_experiment(experiment_name)
@@ -53,3 +53,20 @@ class ModelTrainer:
                 mlflow.log_metric(metric_name, metric_value)
 
         return metrics
+
+    def deploy_model(self, cloud_settings=None):
+        """Deploy the trained model to the cloud."""
+        if self.model is None:
+            raise ValueError("No model trained yet!")
+
+        try:
+            deployment_url = self.cloud_deployer.deploy_model(cloud_settings)
+            return {
+                "status": "success",
+                "deployment_url": deployment_url
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": str(e)
+            }
