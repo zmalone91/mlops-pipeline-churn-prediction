@@ -7,6 +7,7 @@ from src.model_evaluator import ModelEvaluator
 from src.model_monitor import ModelMonitor
 import os
 from dotenv import load_dotenv
+import mlflow
 
 # Load environment variables
 load_dotenv()
@@ -162,25 +163,50 @@ def main():
             key="cloud_provider"
         )
 
-        # Cloud settings
+        # Cloud settings with validation
         cloud_settings = {}
         if cloud_provider == "AWS":
-            cloud_settings['bucket_name'] = st.text_input("S3 Bucket Name", os.getenv('AWS_BUCKET_NAME', ''))
+            bucket_name = st.text_input("S3 Bucket Name", os.getenv('AWS_BUCKET_NAME', ''))
+            if bucket_name:
+                cloud_settings['bucket_name'] = bucket_name
+                # Verify AWS credentials
+                if not os.getenv('AWS_ACCESS_KEY_ID') or not os.getenv('AWS_SECRET_ACCESS_KEY'):
+                    st.warning("AWS credentials not found. Please configure your AWS credentials first.")
+                    st.markdown("""
+                    To configure AWS credentials:
+                    1. Create an IAM user with S3 access
+                    2. Generate Access Key ID and Secret Access Key
+                    3. Add them to your environment variables
+                    """)
+            else:
+                st.warning("Please enter an S3 bucket name")
         elif cloud_provider == "Azure":
             cloud_settings['container_name'] = st.text_input("Storage Container Name", os.getenv('AZURE_CONTAINER_NAME', ''))
         elif cloud_provider == "GCP":
             cloud_settings['bucket_name'] = st.text_input("GCS Bucket Name", os.getenv('GCP_BUCKET_NAME', ''))
 
         if st.button("Deploy Model"):
-            with st.spinner("Deploying model to cloud..."):
-                os.environ['CLOUD_PROVIDER'] = cloud_provider.lower()
-                result = st.session_state.model_trainer.deploy_model(cloud_settings)
+            if cloud_provider == "AWS" and not cloud_settings.get('bucket_name'):
+                st.error("Please provide an S3 bucket name")
+                return
 
-                if result['status'] == 'success':
-                    st.success(f"Model deployed successfully!")
-                    st.info(f"Deployment URL: {result['deployment_url']}")
-                else:
-                    st.error(f"Deployment failed: {result['message']}")
+            with st.spinner("Deploying model to cloud..."):
+                try:
+                    os.environ['CLOUD_PROVIDER'] = cloud_provider.lower()
+                    result = st.session_state.model_trainer.deploy_model(cloud_settings)
+
+                    if result['status'] == 'success':
+                        st.success(f"Model deployed successfully!")
+                        st.info(f"Deployment URL: {result['deployment_url']}")
+
+                        # Add deployment metadata to MLflow
+                        with mlflow.start_run(run_name="model_deployment"):
+                            mlflow.log_param("cloud_provider", cloud_provider)
+                            mlflow.log_param("deployment_url", result['deployment_url'])
+                    else:
+                        st.error(f"Deployment failed: {result['message']}")
+                except Exception as e:
+                    st.error(f"Deployment error: {str(e)}")
 
 
 if __name__ == "__main__":
