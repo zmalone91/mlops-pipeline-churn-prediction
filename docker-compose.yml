@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  mlops-app:
+    build: .
+    ports:
+      - "5000:5000"  # Streamlit
+      - "5001:5001"  # MLflow
+    volumes:
+      - ./mlruns:/app/mlruns  # Persist MLflow data
+      - ./data:/app/data      # Persist generated data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - STREAMLIT_SERVER_PORT=5000
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - MLFLOW_TRACKING_URI=http://0.0.0.0:5001
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
