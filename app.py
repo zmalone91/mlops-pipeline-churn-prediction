@@ -215,9 +215,11 @@ def main():
 
             # S3 Bucket Configuration
             st.markdown("### S3 Bucket Configuration")
-            bucket_name = st.text_input("S3 Bucket Name", os.getenv('AWS_BUCKET_NAME', ''))
-            if bucket_name:
-                cloud_settings = {'bucket_name': bucket_name}
+            bucket_name = st.text_input(
+                "S3 Bucket Name (Optional)", 
+                os.getenv('AWS_BUCKET_NAME', ''),
+                help="Leave empty to use default project bucket name"
+            )
 
             # Deployment Button
             if st.button("Deploy Model"):
@@ -225,17 +227,16 @@ def main():
                     st.error("Please validate your AWS credentials first")
                     return
 
-                if not bucket_name:
-                    st.error("Please provide an S3 bucket name")
-                    return
-
                 with st.spinner("Deploying model to AWS S3..."):
                     try:
                         os.environ['CLOUD_PROVIDER'] = cloud_provider.lower()
+                        cloud_settings = {'bucket_name': bucket_name} if bucket_name else {}
                         result = st.session_state.model_trainer.deploy_model(cloud_settings)
 
-                        if result['status'] == 'success':
+                        if result.get('status') == 'success':
                             st.success("Model deployed successfully!")
+                            if result.get('bucket_message'):
+                                st.info(result['bucket_message'])
                             st.info(f"Deployment URL: {result['deployment_url']}")
 
                             # Add deployment metadata to MLflow

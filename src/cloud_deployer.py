@@ -6,6 +6,7 @@ import boto3
 from botocore.exceptions import ClientError
 from azure.storage.blob import BlobServiceClient
 from google.cloud.storage import Client as GCPStorageClient
+import re
 
 class CloudDeployer:
     """Handles model deployment to different cloud providers."""
@@ -13,6 +14,76 @@ class CloudDeployer:
     def __init__(self):
         self.mlflow_client = MlflowClient()
         self.cloud_provider = os.getenv('CLOUD_PROVIDER', 'aws').lower()
+        self.default_bucket_name = 'mlops-pipeline-demo'
+
+    def _sanitize_bucket_name(self, bucket_name):
+        """Sanitize bucket name to comply with S3 naming rules."""
+        # Convert to lowercase and replace invalid characters with hyphens
+        sanitized = re.sub(r'[^a-z0-9-]', '-', bucket_name.lower())
+        # Remove consecutive hyphens
+        sanitized = re.sub(r'-+', '-', sanitized)
+        # Remove leading/trailing hyphens
+        sanitized = sanitized.strip('-')
+        return sanitized
+
+    def _create_bucket_if_not_exists(self, bucket_name=None):
+        """Create an S3 bucket if it doesn't exist."""
+        if bucket_name is None:
+            bucket_name = self.default_bucket_name
+
+        bucket_name = self._sanitize_bucket_name(bucket_name)
+        s3_client = boto3.client('s3')
+
+        try:
+            s3_client.head_bucket(Bucket=bucket_name)
+            return bucket_name, "Bucket already exists"
+        except ClientError as e:
+            error_code = int(e.response['Error']['Code'])
+            if error_code == 404:  # Bucket doesn't exist
+                try:
+                    s3_client.create_bucket(Bucket=bucket_name)
+                    return bucket_name, "Bucket created successfully"
+                except ClientError as create_error:
+                    if 'BucketAlreadyExists' in str(create_error):
+                        # If the bucket name is taken, append a timestamp
+                        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                        new_bucket_name = f"{bucket_name}-{timestamp}"
+                        s3_client.create_bucket(Bucket=new_bucket_name)
+                        return new_bucket_name, f"Created bucket with timestamp: {new_bucket_name}"
+                    raise Exception(f"Failed to create bucket: {str(create_error)}")
+            raise Exception(f"Error checking bucket: {str(e)}")
+
+    def deploy_to_aws(self, model_path, bucket_name=None):
+        """Deploy model to AWS S3 with enhanced error handling."""
+        if not os.getenv('AWS_ACCESS_KEY_ID') or not os.getenv('AWS_SECRET_ACCESS_KEY'):
+            raise ValueError("AWS credentials not found in environment variables")
+
+        try:
+            # Create or verify bucket exists
+            actual_bucket_name, bucket_message = self._create_bucket_if_not_exists(bucket_name)
+
+            # Ensure we're working with a file path
+            if model_path.startswith('file://'):
+                model_path = model_path[7:]
+
+            s3_client = boto3.client('s3')
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            s3_key = f"models/churn_prediction_{timestamp}"
+
+            # Upload the model using a file object to ensure seekability
+            with open(model_path, 'rb') as model_file:
+                s3_client.upload_fileobj(model_file, actual_bucket_name, s3_key)
+
+            deployment_url = f"s3://{actual_bucket_name}/{s3_key}"
+            return {
+                'status': 'success',
+                'deployment_url': deployment_url,
+                'bucket_message': bucket_message
+            }
+        except ClientError as e:
+            raise Exception(f"AWS S3 error: {str(e)}")
+        except Exception as e:
+            raise Exception(f"Failed to deploy to AWS: {str(e)}")
 
     def _get_latest_model(self, experiment_name="churn_prediction"):
         """Get the latest model from MLflow."""
@@ -29,52 +100,6 @@ class CloudDeployer:
             raise ValueError("No runs found for the experiment")
 
         return runs[0]
-
-    def _create_bucket_if_not_exists(self, bucket_name):
-        """Create an S3 bucket if it doesn't exist."""
-        s3_client = boto3.client('s3')
-        try:
-            s3_client.head_bucket(Bucket=bucket_name)
-        except ClientError as e:
-            error_code = e.response['Error']['Code']
-            if error_code == '404':
-                # Bucket doesn't exist, create it
-                try:
-                    s3_client.create_bucket(Bucket=bucket_name)
-                except ClientError as e:
-                    raise Exception(f"Failed to create bucket: {str(e)}")
-            else:
-                raise Exception(f"Error checking bucket: {str(e)}")
-
-    def deploy_to_aws(self, model_path, bucket_name):
-        """Deploy model to AWS S3 with enhanced error handling."""
-        if not os.getenv('AWS_ACCESS_KEY_ID') or not os.getenv('AWS_SECRET_ACCESS_KEY'):
-            raise ValueError("AWS credentials not found in environment variables")
-
-        try:
-            # Ensure bucket exists
-            self._create_bucket_if_not_exists(bucket_name)
-
-            s3_client = boto3.client('s3')
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            s3_key = f"models/churn_prediction_{timestamp}"
-
-            # Upload the model
-            s3_client.upload_file(model_path, bucket_name, s3_key)
-
-            # Set public read access if configured
-            if os.getenv('AWS_ALLOW_PUBLIC_READ', 'false').lower() == 'true':
-                s3_client.put_object_acl(
-                    Bucket=bucket_name,
-                    Key=s3_key,
-                    ACL='public-read'
-                )
-
-            return f"s3://{bucket_name}/{s3_key}"
-        except ClientError as e:
-            raise Exception(f"AWS S3 error: {str(e)}")
-        except Exception as e:
-            raise Exception(f"Failed to deploy to AWS: {str(e)}")
 
     def deploy_to_azure(self, model_path, container_name):
         """Deploy model to Azure Blob Storage."""
@@ -113,14 +138,6 @@ class CloudDeployer:
         if cloud_settings is None:
             cloud_settings = {}
 
-        # Validate cloud settings
-        if self.cloud_provider == 'aws' and 'bucket_name' not in cloud_settings:
-            raise ValueError("AWS bucket name is required")
-        elif self.cloud_provider == 'azure' and 'container_name' not in cloud_settings:
-            raise ValueError("Azure container name is required")
-        elif self.cloud_provider == 'gcp' and 'bucket_name' not in cloud_settings:
-            raise ValueError("GCP bucket name is required")
-
         # Get latest model run
         latest_run = self._get_latest_model()
         model_path = latest_run.info.artifact_uri
@@ -131,10 +148,16 @@ class CloudDeployer:
 
         # Deploy based on configured cloud provider
         if self.cloud_provider == 'aws':
-            return self.deploy_to_aws(model_path, cloud_settings['bucket_name'])
+            bucket_name = cloud_settings.get('bucket_name')
+            result = self.deploy_to_aws(model_path, bucket_name)
+            return result
         elif self.cloud_provider == 'azure':
+            if 'container_name' not in cloud_settings:
+                raise ValueError("Azure container name is required")
             return self.deploy_to_azure(model_path, cloud_settings['container_name'])
         elif self.cloud_provider == 'gcp':
+            if 'bucket_name' not in cloud_settings:
+                raise ValueError("GCP bucket name is required")
             return self.deploy_to_gcp(model_path, cloud_settings['bucket_name'])
         else:
             raise ValueError(f"Unsupported cloud provider: {self.cloud_provider}")
