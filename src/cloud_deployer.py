@@ -53,6 +53,29 @@ class CloudDeployer:
                     raise Exception(f"Failed to create bucket: {str(create_error)}")
             raise Exception(f"Error checking bucket: {str(e)}")
 
+    def _get_model_file_path(self, run_id):
+        """Get the path to the actual model file from MLflow artifacts."""
+        artifact_uri = self.mlflow_client.get_run(run_id).info.artifact_uri
+        if artifact_uri.startswith('file://'):
+            artifact_uri = artifact_uri[7:]
+
+        # The model should be in the MLflow format under the artifacts directory
+        model_path = os.path.join(artifact_uri, 'model.pkl')
+        if not os.path.exists(model_path):
+            # Try alternative model file locations
+            model_paths = [
+                os.path.join(artifact_uri, 'random_forest_model', 'model.pkl'),
+                os.path.join(artifact_uri, 'model', 'model.pkl')
+            ]
+            for path in model_paths:
+                if os.path.exists(path):
+                    model_path = path
+                    break
+            else:
+                raise FileNotFoundError(f"Could not find model file in {artifact_uri}")
+
+        return model_path
+
     def deploy_to_aws(self, model_path, bucket_name=None):
         """Deploy model to AWS S3 with enhanced error handling."""
         if not os.getenv('AWS_ACCESS_KEY_ID') or not os.getenv('AWS_SECRET_ACCESS_KEY'):
@@ -62,15 +85,14 @@ class CloudDeployer:
             # Create or verify bucket exists
             actual_bucket_name, bucket_message = self._create_bucket_if_not_exists(bucket_name)
 
-            # Ensure we're working with a file path
-            if model_path.startswith('file://'):
-                model_path = model_path[7:]
-
             s3_client = boto3.client('s3')
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             s3_key = f"models/churn_prediction_{timestamp}"
 
             # Upload the model using a file object to ensure seekability
+            if not os.path.isfile(model_path):
+                raise ValueError(f"Invalid model path: {model_path}")
+
             with open(model_path, 'rb') as model_file:
                 s3_client.upload_fileobj(model_file, actual_bucket_name, s3_key)
 
@@ -140,11 +162,7 @@ class CloudDeployer:
 
         # Get latest model run
         latest_run = self._get_latest_model()
-        model_path = latest_run.info.artifact_uri
-
-        # Remove 'file://' prefix if present
-        if model_path.startswith('file://'):
-            model_path = model_path[7:]
+        model_path = self._get_model_file_path(latest_run.info.run_id)
 
         # Deploy based on configured cloud provider
         if self.cloud_provider == 'aws':
